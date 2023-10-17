@@ -26,7 +26,7 @@ public:
     LruCache& operator=(LruCache&) = delete;
     LruCache& operator=(LruCache&&) = delete;
 
-    const TRep& make_request(const TReq& req) {
+    TRep make_request(const TReq& req) {
         {
             // search in cache
             std::lock_guard guard(m_mtx);
@@ -48,61 +48,69 @@ protected:
 private:
     const size_t m_max_size = 0;
 
-    using CacheType = std::map<TReq, std::tuple<TRep, int>>;
-    using CacheIterator = typename CacheType::iterator;
+    struct DeclT {
+        using CacheType = std::map<TReq, std::tuple<TRep, DeclT>>;
+        using QueueType = std::list<typename CacheType::iterator>;
+
+        typename QueueType::iterator it;
+    };
+
+    using CacheIterator = typename DeclT::CacheType::iterator;
 
     // key: request
-    // value: tuple(reply, counter_of_requests)
-    CacheType m_cache;
+    // value: tuple(reply, iterator_to_queue)
+    typename DeclT::CacheType m_cache;
 
     // queue of request, each item is reference to request in map
-    std::list<CacheIterator> m_req_queue;
+    typename DeclT::QueueType m_req_queue;
 
     std::mutex m_mtx;
 
-    void update_request_queue(CacheIterator& it) {
+    void update_request_queue(CacheIterator & cache_it) {
         // guard outside
 
-        m_req_queue.push_front(it);
-        std::get<1>(it->second)++;
+        auto& queue_it = std::get<1>(cache_it->second).it;
+
+        if (queue_it != m_req_queue.end()) {
+            m_req_queue.erase(queue_it);
+        }
+        m_req_queue.push_front(cache_it);
+        queue_it = m_req_queue.begin();
     }
 
-    const TRep& add_new_item_in_cache(const TReq& req) {
+    TRep add_new_item_in_cache(const TReq& req) {
         TRep reply = prepare_reply(req);
 
         {
             std::lock_guard guard(m_mtx);
 
-            auto [it, added] = m_cache.emplace(req, std::make_tuple(TRep(), 0));
+            auto [it, added] = m_cache.emplace(req, std::make_tuple(TRep(), DeclT{m_req_queue.end()}));
             if (added) {
                 // may be inserted in another thread
                 std::get<0>(it->second) = std::move(reply);
             }
             update_request_queue(it);
+
             INFO(req, "added");
 
-            if (m_cache.size() > m_max_size) {
-                remove_item_from_cache();
-            }
+            remove_item_from_cache_if_need();
 
             return std::get<0>(it->second);
         }
     }
 
-    void remove_item_from_cache() {
+    void remove_item_from_cache_if_need() {
         // guard outside
 
-        while (!m_req_queue.empty()) {
+        assert(m_req_queue.size() == m_cache.size() && "Implementation error!");
+
+        if (m_cache.size() > m_max_size) {
             auto it = m_req_queue.back();
             m_req_queue.pop_back();
 
-            if (--std::get<1>(it->second) <= 0) {
-                // found item to remove
-                m_cache.erase(it);
-                INFO(it->first, "remov");
-                return;
-            }
+            assert(it != m_cache.end() && "Implementation error!");
+            m_cache.erase(it);
+            INFO(it->first, "remov");
         }
-        assert(false && "Implementation error!");
     }
 };
