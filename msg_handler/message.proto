@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+import "google/protobuf/any.proto";
+
+package pb;
+
+
+enum MessageType {
+	PONG = 0;
+	PING = 1;
+	CONNECT = 2;
+	DISCONNECT = 3;
+	GET_DEV_INFO = 4;
+	DEV_INFO = 5;
+}
+
+
+message Message {
+  MessageType type = 1;
+  google.protobuf.Any data = 2;
+}
+
+
+message DeviceInfo {
+	string name = 1;
+	string osVersion = 2;
+	string serialNumber = 3;
+	string description = 4;
+}
